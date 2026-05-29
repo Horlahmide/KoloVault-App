@@ -1,0 +1,62 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/lib/generated"
+}
+
+datasource db {
+  provider = "sqlite"
+}
+
+model User {
+  id             String    @id @default(cuid())
+  email          String    @unique
+  passwordHash   String
+  failedAttempts Int       @default(0)
+  lockoutUntil   DateTime?
+  resetToken     String?   @unique
+  resetExpires   DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+  sessions       Session[]
+  entries        Entry[]
+  goal           Goal?
+}
+
+model Session {
+  id        String   @id
+  userId    String
+  expiresAt DateTime
+  userAgent String?
+  ipAddress String?
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model Entry {
+  id        String   @id @default(cuid())
+  userId    String
+  amount    Float
+  note      String
+  date      DateTime
+  createdAt DateTime @default(now())
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model Goal {
+  id           String @id @default(cuid())
+  userId       String @unique
+  targetAmount Float
+  user         User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model RateLimit {
+  key         String   @id // e.g., "login:ip:127.0.0.1"
+  count       Int      @default(0)
+  lastAttempt DateTime @default(now())
+}
