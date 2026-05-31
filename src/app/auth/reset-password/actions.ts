@@ -1,7 +1,7 @@
 "use server";
 
 import { prisma } from "@/lib/prisma";
-import { hashPassword } from "@/lib/auth";
+import { hashPassword, hashToken } from "@/lib/auth";
 import { validatePassword } from "@/lib/security";
 
 export async function resetPassword(formData: FormData) {
@@ -17,9 +17,11 @@ export async function resetPassword(formData: FormData) {
   }
 
   try {
+    const tokenHash = hashToken(token);
+
     const user = await prisma.user.findFirst({
       where: {
-        resetToken: token,
+        resetToken: tokenHash,
         resetExpires: {
           gt: new Date(),
         },

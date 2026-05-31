@@ -18,7 +18,7 @@ export function proxy(request: NextRequest) {
     if (origin && host) {
       const originHost = new URL(origin).host;
       if (originHost !== host) {
-        return new NextResponse("CSRF Protection: Invalid Origin", { status: 403 });
+        return new NextResponse("Forbidden", { status: 403 });
       }
     } else if (!origin && request.headers.get("referer")) {
       // Fallback to referer if origin is missing (rare for modern browsers on POST)
@@ -26,14 +26,14 @@ export function proxy(request: NextRequest) {
       if (referer) {
         const refererHost = new URL(referer).host;
         if (refererHost !== host) {
-          return new NextResponse("CSRF Protection: Invalid Referer", { status: 403 });
+          return new NextResponse("Forbidden", { status: 403 });
         }
       }
     }
     // If both origin and referer are missing, we might want to block or allow depending on policy.
     // For this app, we'll require at least one for mutating requests from browsers.
     if (!origin && !request.headers.get("referer")) {
-      return new NextResponse("CSRF Protection: Missing Origin/Referer", { status: 403 });
+      return new NextResponse("Forbidden", { status: 403 });
     }
   }
 

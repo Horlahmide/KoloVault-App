@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, Suspense } from "react";
+import { useState, Suspense, useEffect } from "react";
 import { resetPassword } from "./actions";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
@@ -10,7 +10,18 @@ function ResetPasswordForm() {
   const [success, setSuccess] = useState(false);
   const [loading, setLoading] = useState(false);
   const searchParams = useSearchParams();
-  const token = searchParams.get("token");
+  
+  // Store token in state so we can clear the URL without losing it
+  const [token, setToken] = useState<string | null>(null);
+
+  useEffect(() => {
+    const t = searchParams.get("token");
+    if (t) {
+      setToken(t);
+      // Remove token from URL immediately for security
+      window.history.replaceState({}, "", window.location.pathname);
+    }
+  }, [searchParams]);
 
   async function handleSubmit(formData: FormData) {
     setLoading(true);

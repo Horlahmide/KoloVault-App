@@ -4,8 +4,7 @@ import { z } from "zod";
 import { prisma } from "@/lib/prisma";
 import { verifyPassword, createSession } from "@/lib/auth";
 import { 
-  checkIpRateLimit, 
-  incrementIpRateLimit, 
+  consumeIpRateLimit, 
   handleFailedLogin, 
   resetFailedLogin 
 } from "@/lib/security";
@@ -24,15 +23,14 @@ export async function login(formData: FormData) {
   const ip = headersList.get("x-forwarded-for")?.split(",")[0] || "127.0.0.1";
   const userAgent = headersList.get("user-agent") || undefined;
 
-  // 1. Check IP Rate Limit
-  const isAllowed = await checkIpRateLimit(ip);
+  // 1. Consume IP Rate Limit (Atomic check and increment)
+  const isAllowed = await consumeIpRateLimit(ip);
   if (!isAllowed) {
     return { error: "Too many attempts. Please try again in 15 minutes." };
   }
 
   const result = LoginSchema.safeParse({ email, password });
   if (!result.success) {
-    await incrementIpRateLimit(ip);
     return { error: "Invalid email or password." };
   }
 
@@ -41,23 +39,24 @@ export async function login(formData: FormData) {
       where: { email },
     });
 
-    if (!user) {
-      // Increment IP rate limit and return generic error
-      await incrementIpRateLimit(ip);
+    // To prevent timing attacks, we always perform a password verification.
+    // If the user doesn't exist, we verify against a dummy hash.
+    const DUMMY_HASH = "$argon2id$v=19$m=65536,t=3,p=4$42/lH3zYtO8vX7S9Y7fJ8w$fH3zYtO8vX7S9Y7fJ8w42/lH3zYtO8vX7S9Y7fJ8w";
+    const passwordToVerify = user ? user.passwordHash : DUMMY_HASH;
+    const isValid = await verifyPassword(password, passwordToVerify);
+
+    if (!user || !isValid) {
+      // If the user exists but the password was wrong, we record a failed attempt
+      if (user && !isValid) {
+        await handleFailedLogin(user.id);
+      }
       return { error: "Invalid email or password." };
     }
 
     // 2. Check Account Lockout
+    // We use a generic message to prevent account enumeration via lockout state
     if (user.lockoutUntil && user.lockoutUntil > new Date()) {
-      return { error: "Account temporarily locked. Please try again in an hour." };
-    }
-
-    const isValid = await verifyPassword(password, user.passwordHash);
-
-    if (!isValid) {
-      await incrementIpRateLimit(ip);
-      await handleFailedLogin(user.id);
-      return { error: "Invalid email or password." };
+      return { error: "Access denied. Please check your credentials or try again later." };
     }
 
     // Success

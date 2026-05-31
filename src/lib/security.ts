@@ -6,68 +6,66 @@ const IP_RATE_LIMIT_WINDOW_MS = 15 * 60 * 1000; // 15 minutes
 const ACCOUNT_LOCKOUT_MAX = 10;
 const ACCOUNT_LOCKOUT_WINDOW_MS = 60 * 60 * 1000; // 1 hour
 
-export async function checkIpRateLimit(ip: string): Promise<boolean> {
-  const key = `login:ip:${ip}`;
-  const record = await prisma.rateLimit.findUnique({
-    where: { key },
-  });
-
-  if (!record) return true;
-
-  const now = Date.now();
-  const lastAttempt = record.lastAttempt.getTime();
-
-  if (now - lastAttempt > IP_RATE_LIMIT_WINDOW_MS) {
-    // Reset if window passed
-    await prisma.rateLimit.update({
-      where: { key },
-      data: { count: 0, lastAttempt: new Date() },
-    });
-    return true;
-  }
-
-  return record.count < IP_RATE_LIMIT_MAX;
-}
-
-export async function incrementIpRateLimit(ip: string) {
+/**
+ * Consumes one rate limit attempt for an IP.
+ * Returns true if the attempt is allowed, false if blocked.
+ * Uses a transaction to prevent race conditions.
+ */
+export async function consumeIpRateLimit(ip: string): Promise<boolean> {
   const key = `login:ip:${ip}`;
   const now = new Date();
 
-  await prisma.rateLimit.upsert({
-    where: { key },
-    update: {
-      count: { increment: 1 },
-      lastAttempt: now,
-    },
-    create: {
-      key,
-      count: 1,
-      lastAttempt: now,
-    },
+  return await prisma.$transaction(async (tx) => {
+    const record = await tx.rateLimit.findUnique({
+      where: { key },
+    });
+
+    if (!record) {
+      await tx.rateLimit.create({
+        data: { key, count: 1, lastAttempt: now },
+      });
+      return true;
+    }
+
+    const lastAttemptTime = record.lastAttempt.getTime();
+    let newCount: number;
+
+    if (now.getTime() - lastAttemptTime > IP_RATE_LIMIT_WINDOW_MS) {
+      // Window expired, reset to 1
+      newCount = 1;
+    } else {
+      // Within window, increment
+      newCount = record.count + 1;
+    }
+
+    await tx.rateLimit.update({
+      where: { key },
+      data: { count: newCount, lastAttempt: now },
+    });
+
+    return newCount <= IP_RATE_LIMIT_MAX;
   });
 }
 
 export async function handleFailedLogin(userId: string) {
-  const user = await prisma.user.findUnique({
-    where: { id: userId },
-    select: { failedAttempts: true },
-  });
+  return await prisma.$transaction(async (tx) => {
+    // 1. Atomically increment failed attempts
+    const user = await tx.user.update({
+      where: { id: userId },
+      data: {
+        failedAttempts: { increment: 1 },
+      },
+    });
 
-  if (!user) return;
-
-  const newAttempts = user.failedAttempts + 1;
-  let lockoutUntil: Date | null = null;
-
-  if (newAttempts >= ACCOUNT_LOCKOUT_MAX) {
-    lockoutUntil = new Date(Date.now() + ACCOUNT_LOCKOUT_WINDOW_MS);
-  }
-
-  await prisma.user.update({
-    where: { id: userId },
-    data: {
-      failedAttempts: newAttempts,
-      lockoutUntil,
-    },
+    // 2. If the threshold is reached or exceeded, apply/extend the lockout
+    if (user.failedAttempts >= ACCOUNT_LOCKOUT_MAX) {
+      await tx.user.update({
+        where: { id: userId },
+        data: {
+          lockoutUntil: new Date(Date.now() + ACCOUNT_LOCKOUT_WINDOW_MS),
+        },
+      });
+    }
   });
 }
 
