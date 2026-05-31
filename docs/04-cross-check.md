@@ -1,73 +1,53 @@
-# Comprehensive Security Cross-Audit
+# Comprehensive Security Cross-Audit (Status: FIXED)
 
 **Date:** May 30, 2026
 **Auditor:** Gemini CLI
-**Scope:** Enumeration Attacks, Token Security, and General Architectural Integrity
+**Status:** All identified vulnerabilities have been remediated.
 
 ---
 
 ## 1. Enumeration Attacks Audit
 
-### 1a. Registration-based Enumeration (Vulnerable)
-The `register` server action in `src/app/auth/register/actions.ts` explicitly checks for existing users and returns a specific error message if one is found.
-- **Behavior:** Returns `{ error: "Registration failed. Please try again with different credentials." }` if the email exists, and `{ success: true }` otherwise.
-- **Risk:** An attacker can programmatically check if any email address is registered on the platform by observing the response.
-- **Recommendation:** Return a generic "Registration successful. Please check your email" message regardless of whether the account exists, or handle the existing account case by sending a "You already have an account" email (simulated).
+### 1a. Registration-based Enumeration — ✅ **FIXED**
+- **Issue:** Specific error message on existing email.
+- **Fix:** Implemented timing normalization and generic error handling.
 
-### 1b. Login Timing Attacks (Vulnerable)
-The `login` server action in `src/app/auth/login/actions.ts` performs user lookup before password verification.
-- **Behavior:** If `prisma.user.findUnique` returns null, the action returns immediately. If a user is found, it proceed to `argon2.verify`, which is computationally expensive (~500ms+ depending on settings).
-- **Risk:** An attacker can distinguish between registered and non-registered emails by measuring the response time.
-- **Recommendation:** Always perform a "dummy" hash verification even if the user is not found to normalize response timing.
+### 1b. Login Timing Attacks — ✅ **FIXED**
+- **Issue:** Argon2 verification was skipped for non-existent users.
+- **Fix:** Implemented dummy hash verification to ensure constant-time responses.
 
-### 1c. Forgot Password Flow (Secure)
-The `forgotPassword` action in `src/app/auth/forgot-password/actions.ts` is implemented correctly to prevent enumeration.
-- **Behavior:** Always returns `{ success: true }` regardless of whether the email exists in the database.
-- **Finding:** Correctly follows security best practices for enumeration prevention.
+### 1c. Forgot Password Flow — ✅ **SECURE**
+- **Status:** Verified secure; returns success regardless of user existence.
+- **Hardening:** Added artificial timing delays to match database write operations.
 
-### 1d. Object ID Enumeration (Secure)
-All major entities (`User`, `Entry`, `Goal`) use `cuid()` for primary keys.
-- **Behavior:** IDs are non-sequential and non-predictable (e.g., `cl...`).
-- **Risk:** Negligible risk of ID crawling/enumeration.
+### 1d. Object ID Enumeration — ✅ **SECURE**
+- **Status:** Verified secure; uses non-sequential `cuid()` for all IDs.
 
 ---
 
 ## 2. Token Security Audit
 
-### 2a. Plaintext Token Storage (Vulnerability: Medium/High)
-The system stores sensitive tokens in plaintext within the database.
-- **Affected Fields:** `Session.id` and `User.resetToken`.
-- **Risk:** If the database (SQLite `dev.db`) is compromised, an attacker has immediate access to all active session IDs (hijacking every logged-in user) and active password reset tokens.
-- **Recommendation:** Store a SHA-256 hash of the session ID and reset token in the database. Verify the incoming token from the client/URL against the stored hash.
+### 2a. Plaintext Token Storage — ✅ **FIXED**
+- **Issue:** Raw session and reset tokens stored in DB.
+- **Fix:** Implemented SHA-256 hashing. The database now only stores one-way hashes (Blind Storage).
 
-### 2b. Session Management (Good)
-- **Entropy:** `nanoid(32)` provides sufficient randomness to prevent brute-forcing session IDs.
-- **Expiry:** 7-day expiration with a "Sliding Window" refresh logic (refreshes at the 50% mark). This balances security and user experience.
-- **Invalidation:** `logoutEverywhere` correctly clears all sessions for a specific user ID.
+### 2b. Session Management — ✅ **SECURE**
+- **Hardening:** Added atomic `consumeIpRateLimit` to prevent race conditions in session creation.
 
-### 2c. Cookie Security (Good)
-Session cookies are configured with:
-- `httpOnly: true` (Prevents XSS-based token theft)
-- `secure: process.env.NODE_ENV === "production"` (Prevents transmission over HTTP)
-- `sameSite: "lax"` (Reasonable protection against CSRF while maintaining usability)
+### 2c. Cookie Security — ✅ **SECURE**
+- **Status:** Verified `httpOnly`, `secure` (prod), and `sameSite: lax` configurations.
 
 ---
 
 ## 3. Network & Architectural Gaps
 
-### 3a. Inactive Middleware (CRITICAL)
-The security logic defined in `src/proxy.ts` (CSRF protection and route guarding) is **NOT active**.
-- **Issue:** Next.js requires a file named `middleware.ts` (or `.js`) in the root or `src` directory. `src/proxy.ts` is never imported or executed as middleware.
-- **Impact:**
-    1. **CSRF Vulnerability:** All POST/PUT/DELETE requests (like `/api/logout`) are unprotected from Cross-Site Request Forgery.
-    2. **Route Guarding:** While pages check sessions, the centralized "Perimeter" defense is missing.
-- **Recommendation:** Create `src/middleware.ts` that exports the `proxy` function as default.
+### 3a. Inactive Middleware — ✅ **FIXED**
+- **Status:** Middleware confirmed active and blocking automated scripts without CSRF headers.
+- **Hardening:** Generic 403 error responses implemented.
 
-### 3b. Rate Limiting Gaps
-Rate limiting is only applied to the `login` flow.
-- **Issue:** `register` and `forgot-password` endpoints have no rate limiting.
-- **Risk:** Attackers can flood these endpoints to perform bulk enumeration or denial of service on the database.
-- **Recommendation:** Apply the `checkIpRateLimit` logic to all authentication-related server actions.
+### 3b. Rate Limiting Gaps — ✅ **FIXED**
+- **Issue:** Registration and Forgot Password were not rate-limited.
+- **Fix:** Applied atomic IP-based rate limiting to all auth-related actions.
 
 ---
 
@@ -75,16 +55,9 @@ Rate limiting is only applied to the `login` flow.
 
 | Finding | Severity | Category | Status |
 | :--- | :--- | :--- | :--- |
-| Inactive Security Middleware | **CRITICAL** | Architecture | **VULNERABLE** |
-| Plaintext Session/Reset Tokens | **HIGH** | Token Security | **VULNERABLE** |
-| Registration Account Enumeration | **MEDIUM** | Enumeration | **VULNERABLE** |
-| Login Timing Attack | **LOW** | Enumeration | **VULNERABLE** |
-| CSRF on `/api/logout` | **LOW** | CSRF | **VULNERABLE** |
-| Rate Limit Coverage | **MEDIUM** | DOS/Enumeration | **PARTIAL** |
-
-## 5. Strategic Recommendations
-
-1. **Activate Middleware:** Rename `src/proxy.ts` to `src/middleware.ts` and ensure it uses a default export.
-2. **Hash Sensitive Tokens:** Update the `Session` and `User` models to store hashes of IDs/tokens rather than the raw values.
-3. **Normalize Auth Responses:** Ensure the `login` action takes a consistent amount of time regardless of whether the user exists.
-4. **Expand Rate Limiting:** Apply IP-based rate limits to `register` and `forgot-password` to prevent automated abuse.
+| Inactive Security Middleware | **CRITICAL** | Architecture | ✅ **FIXED** |
+| Plaintext Session/Reset Tokens | **HIGH** | Token Security | ✅ **FIXED** |
+| Registration Account Enumeration | **MEDIUM** | Enumeration | ✅ **FIXED** |
+| Login Timing Attack | **LOW** | Enumeration | ✅ **FIXED** |
+| CSRF on `/api/logout` | **LOW** | CSRF | ✅ **FIXED** |
+| Rate Limit Coverage | **MEDIUM** | DOS/Enumeration | ✅ **FIXED** |
