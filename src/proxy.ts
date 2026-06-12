@@ -39,7 +39,10 @@ export function proxy(request: NextRequest) {
 
   // 2. Route Protection
   const isAuthRoute = pathname.startsWith("/auth");
-  const isDashboardRoute = pathname.startsWith("/dashboard") || pathname.startsWith("/settings") || pathname === "/";
+  const isDashboardRoute =
+    pathname.startsWith("/dashboard") ||
+    pathname.startsWith("/settings") ||
+    pathname === "/";
 
   if (isDashboardRoute && !sessionId) {
     if (pathname === "/") return NextResponse.next(); // Allow landing page if I add one, but dashboard is priority
