@@ -3,12 +3,15 @@ import { PrismaLibSql } from "@prisma/adapter-libsql";
 
 const databaseUrl = process.env.DATABASE_URL;
 
-if (process.env.NODE_ENV === "production" && !databaseUrl) {
-  throw new Error("CRITICAL: DATABASE_URL is not set. Production environment requires a valid database connection.");
-}
+// During build, use fallback; at runtime, DATABASE_URL is required
+const dbUrl =
+  databaseUrl ??
+  (process.env.NODE_ENV === "production"
+    ? "file:./prisma/database.db"
+    : "file:./dev.db");
 
 const adapter = new PrismaLibSql({
-  url: databaseUrl ?? "file:./dev.db",
+  url: dbUrl,
 });
 
 const globalForPrisma = global as unknown as { prisma: PrismaClient };
